@@ -1,0 +1,11 @@
+{
+  "$schema": "https://app.clawnify.com/schema/v1/clawnify.json",
+  "name": "Open Post",
+  "description": "Social media post scheduler with a calendar view, multi-channel composer, queue management, and analytics. An open alternative to Buffer and Hypefury.",
+  "app": {
+    "framework": "preact+hono",
+    "database": true,
+    "storage": false,
+    "credentials": ["twitter"]
+  }
+}
