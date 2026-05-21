@@ -23,7 +23,7 @@ type Env = {
 const app = new Hono<Env>();
 
 app.use("*", async (c, next) => {
-  initDB(c.env.DB);
+  initDB(c.env);
   initCredentials({
     env: c.env as unknown as Record<string, string>,
     credentialService: c.env.CREDENTIALS,
