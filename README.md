@@ -131,11 +131,12 @@ src/
 
 In production, the app uses Cloudflare Service Bindings to fetch fresh OAuth tokens from Clawnify's central credential Worker -- zero network hop, no secrets stored on the app.
 
-```
-App Worker --(RPC)--> CredentialService.getToken("twitter", orgId)
-  --> Composio (auto-refresh)
-  --> Fresh Bearer token
-  --> X API v2
+```mermaid
+flowchart LR
+    app["App Worker"] -->|RPC| cred["CredentialService.getToken<br/>(twitter, orgId)"]
+    cred --> composio["Composio<br/>(auto-refresh)"]
+    composio --> token["Fresh Bearer token"]
+    token --> api["X API v2"]
 ```
 
 See [credentials-service-binding.md](https://github.com/clawnify/clawnify/blob/main/docs/credentials-service-binding.md) for the full architecture.
