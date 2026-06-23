@@ -1,8 +1,11 @@
 import { Hono } from "hono";
 import { initDB, query, get, run } from "./db";
-import { initCredentials, getTwitterAuth } from "./credentials";
+import { initCredentials, getTwitterAuth, getToken } from "./credentials";
 import type { CredentialServiceBinding } from "./credentials";
 import { postTweetBearer, postTweetOAuth1 } from "./twitter";
+import { postLinkedIn } from "./linkedin";
+import { postInstagram } from "./instagram";
+import { scheduleDelivery, cancelDelivery, verifyDeliverySignature } from "./queue";
 
 type Env = {
   Bindings: {
@@ -11,6 +14,9 @@ type Env = {
     CREDENTIALS?: CredentialServiceBinding;
     // App owner's org ID (injected by builder as env var)
     CLAWNIFY_ORG_ID?: string;
+    // Managed-service token (injected by Clawnify builder) — authorizes the
+    // queue service that fires scheduled posts.
+    CLAWNIFY_TOKEN?: string;
     // Local dev fallback (.dev.vars)
     TWITTER_BEARER_TOKEN?: string;
     TWITTER_CONSUMER_KEY?: string;
@@ -19,6 +25,96 @@ type Env = {
     TWITTER_ACCESS_TOKEN_SECRET?: string;
   };
 };
+
+interface PublishResult {
+  channel: string;
+  platform: string;
+  success: boolean;
+  error?: string;
+  ref?: string;
+}
+
+// Publish one post to every channel assigned to it, then update its status.
+// Shared by the manual publish endpoint and the scheduled /internal/publish
+// delivery. Credentials are resolved per-platform via getToken (raw tokens —
+// the app calls each platform API directly).
+async function publishPost(id: number): Promise<{ published: boolean; results: PublishResult[] } | null> {
+  const post = await get<any>("SELECT * FROM posts WHERE id = ?", [id]);
+  if (!post || !post.content?.trim()) return null;
+
+  const channels = await query<any>(
+    `SELECT c.* FROM channels c
+     JOIN post_channels pc ON pc.channel_id = c.id
+     WHERE pc.post_id = ?`,
+    [id],
+  );
+  const media = await query<any>("SELECT * FROM media WHERE post_id = ? ORDER BY id ASC", [id]);
+  const firstImage = media[0]?.url as string | undefined;
+
+  const results: PublishResult[] = [];
+  for (const channel of channels) {
+    results.push(await publishToChannel(channel, post.content, firstImage));
+  }
+
+  const anySuccess = results.some((r) => r.success);
+  if (anySuccess) {
+    await run(
+      "UPDATE posts SET status = 'published', published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+      [id],
+    );
+  }
+  return { published: anySuccess, results };
+}
+
+async function publishToChannel(channel: any, content: string, imageUrl?: string): Promise<PublishResult> {
+  const base = { channel: channel.name as string, platform: channel.platform as string };
+  switch (channel.platform) {
+    case "twitter": {
+      const auth = await getTwitterAuth();
+      if (!auth) return { ...base, success: false, error: "No Twitter credentials. Connect Twitter in Clawnify." };
+      const r = auth.mode === "bearer"
+        ? await postTweetBearer(auth.accessToken, content)
+        : await postTweetOAuth1(auth, content);
+      return { ...base, success: r.success, error: r.error, ref: r.tweet_id };
+    }
+    case "linkedin": {
+      const token = await getToken("linkedin");
+      if (!token) return { ...base, success: false, error: "No LinkedIn credentials. Connect LinkedIn in Clawnify." };
+      const r = await postLinkedIn(token, content, channel.handle);
+      return { ...base, success: r.success, error: r.error, ref: r.post_urn };
+    }
+    case "instagram": {
+      const token = await getToken("instagram");
+      if (!token) return { ...base, success: false, error: "No Instagram credentials. Connect Instagram in Clawnify." };
+      const r = await postInstagram(token, { igUserId: channel.handle, caption: content, imageUrl });
+      return { ...base, success: r.success, error: r.error, ref: r.media_id };
+    }
+    default:
+      return { ...base, success: false, error: `Publishing to ${channel.platform} not yet supported` };
+  }
+}
+
+// Reconcile a post's queue job with its current schedule. Enqueues a delivery
+// when the post is scheduled with a future time, and cancels a prior job on
+// reschedule/unschedule. No-op (and harmless) in local dev where there's no
+// CLAWNIFY_TOKEN.
+async function syncSchedule(
+  env: Env["Bindings"],
+  origin: string,
+  postId: number,
+  status: string,
+  scheduledAt: string | null,
+  existingJobId: string | null,
+): Promise<void> {
+  const token = env.CLAWNIFY_TOKEN;
+  if (existingJobId && token) await cancelDelivery(token, existingJobId);
+
+  let newJobId: string | null = null;
+  if (token && status === "scheduled" && scheduledAt) {
+    newJobId = await scheduleDelivery({ token, origin, postId, runAt: scheduledAt });
+  }
+  await run("UPDATE posts SET queue_job_id = ? WHERE id = ?", [newJobId, postId]);
+}
 
 const app = new Hono<Env>();
 
@@ -239,6 +335,8 @@ app.post("/api/posts", async (c) => {
     }
   }
 
+  await syncSchedule(c.env, new URL(c.req.url).origin, Number(postId), postStatus, scheduled_at || null, null);
+
   const post = await get("SELECT * FROM posts WHERE id = ?", [postId]);
   return c.json(await enrichPost(post), 201);
 });
@@ -286,17 +384,33 @@ app.put("/api/posts/:id", async (c) => {
     }
   }
 
+  const resolvedStatus = status ?? (existing as any).status;
+  const resolvedScheduledAt =
+    scheduled_at !== undefined ? scheduled_at : (existing as any).scheduled_at;
+  await syncSchedule(
+    c.env,
+    new URL(c.req.url).origin,
+    id,
+    resolvedStatus,
+    resolvedScheduledAt || null,
+    (existing as any).queue_job_id ?? null,
+  );
+
   const post = await get("SELECT * FROM posts WHERE id = ?", [id]);
   return c.json(await enrichPost(post));
 });
 
 app.delete("/api/posts/:id", async (c) => {
   const id = Number(c.req.param("id"));
+  const existing = await get<any>("SELECT queue_job_id FROM posts WHERE id = ?", [id]);
+  if (existing?.queue_job_id && c.env.CLAWNIFY_TOKEN) {
+    await cancelDelivery(c.env.CLAWNIFY_TOKEN, existing.queue_job_id);
+  }
   await run("DELETE FROM posts WHERE id = ?", [id]);
   return c.json({ ok: true });
 });
 
-// ── Publish ──
+// ── Publish (manual — "post now" from the dashboard) ──
 
 app.post("/api/posts/:id/publish", async (c) => {
   const id = Number(c.req.param("id"));
@@ -304,45 +418,44 @@ app.post("/api/posts/:id/publish", async (c) => {
   if (!post) return c.json({ error: "Post not found" }, 404);
   if (!post.content?.trim()) return c.json({ error: "Post has no content" }, 400);
 
-  // Get channels for this post
-  const channels = await query<any>(
-    `SELECT c.* FROM channels c
-     JOIN post_channels pc ON pc.channel_id = c.id
-     WHERE pc.post_id = ?`,
-    [id]
+  const channelCount = await get<{ count: number }>(
+    "SELECT COUNT(*) as count FROM post_channels WHERE post_id = ?",
+    [id],
   );
+  if (!channelCount?.count) return c.json({ error: "No channels assigned to this post" }, 400);
 
-  if (channels.length === 0) return c.json({ error: "No channels assigned to this post" }, 400);
+  const result = await publishPost(id);
+  if (!result) return c.json({ error: "Post not found or empty" }, 400);
+  return c.json(result);
+});
 
-  const results: Array<{ channel: string; platform: string; success: boolean; error?: string; tweet_id?: string }> = [];
+// ── Scheduled delivery (called by the Clawnify queue at scheduled_at) ──
+//
+// Public route (declared in clawnify.json) because it's invoked server-to-
+// server by the queue with no perimeter token — authenticity is enforced by
+// the HMAC signature instead.
 
-  for (const channel of channels) {
-    if (channel.platform === "twitter") {
-      const auth = await getTwitterAuth();
-      if (!auth) {
-        results.push({ channel: channel.name, platform: "twitter", success: false, error: "No Twitter credentials configured. Add keys to .dev.vars or connect via Clawnify." });
-        continue;
-      }
-      const result = auth.mode === "bearer"
-        ? await postTweetBearer(auth.accessToken, post.content)
-        : await postTweetOAuth1(auth, post.content);
-      results.push({ channel: channel.name, platform: "twitter", success: result.success, error: result.error, tweet_id: result.tweet_id });
-    } else {
-      results.push({ channel: channel.name, platform: channel.platform, success: false, error: `Publishing to ${channel.platform} not yet supported` });
-    }
-  }
+app.post("/internal/publish", async (c) => {
+  const raw = await c.req.text();
+  const valid = await verifyDeliverySignature(
+    raw,
+    c.req.header("X-Clawnify-Signature"),
+    c.env.CLAWNIFY_TOKEN,
+  );
+  if (!valid) return c.json({ error: "invalid signature" }, 401);
 
-  const allSuccess = results.every((r) => r.success);
-  const anySuccess = results.some((r) => r.success);
+  const { post_id } = JSON.parse(raw || "{}") as { post_id?: number };
+  if (!post_id) return c.json({ error: "post_id required" }, 400);
 
-  if (anySuccess) {
-    await run(
-      "UPDATE posts SET status = 'published', published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
-      [id]
-    );
-  }
+  // The job already fired — clear its id so reconciliation doesn't try to
+  // cancel a delivered job.
+  await run("UPDATE posts SET queue_job_id = NULL WHERE id = ?", [post_id]);
 
-  return c.json({ published: anySuccess, results });
+  const result = await publishPost(post_id);
+  if (!result) return c.json({ error: "post not found or empty" }, 404);
+  // 200 so the queue marks the job done even if a channel rejected the content
+  // (a platform-level rejection isn't a delivery failure to retry).
+  return c.json(result);
 });
 
 // ── Stats ──

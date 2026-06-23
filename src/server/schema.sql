@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS posts (
   status TEXT NOT NULL DEFAULT 'draft',
   scheduled_at TEXT,
   published_at TEXT,
+  -- Clawnify queue job that will fire this post at scheduled_at (if any), so we
+  -- can cancel/replace it when the post is rescheduled or unscheduled.
+  queue_job_id TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
