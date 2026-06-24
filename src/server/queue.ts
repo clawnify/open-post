@@ -106,7 +106,15 @@ export async function verifyDelivery(
     }
     const jwk = jwksCache!.keys.find((k) => !keyId || k.kid === keyId) ?? jwksCache!.keys[0];
     if (!jwk) return false;
-    const key = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, ["verify"]);
+    // Import only the core OKP fields — workerd's importKey is stricter than
+    // Node's and can reject the extra kid/use/alg fields the JWKS carries.
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      { kty: jwk.kty, crv: jwk.crv, x: jwk.x },
+      { name: "Ed25519" },
+      false,
+      ["verify"],
+    );
     const msg = new TextEncoder().encode(`${ts}.${rawBody}`);
     return await crypto.subtle.verify(
       "Ed25519",
