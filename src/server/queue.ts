@@ -78,13 +78,42 @@ export async function cancelDelivery(token: string, jobId: string): Promise<void
  * is published.)
  */
 const JWKS_URL = "https://services.clawnify.com/.well-known/jwks.json";
-let jwksCache: { keys: Array<{ kty: string; crv: string; x: string; kid: string }> } | null = null;
+
+// Platform public verification keys, kid -> base64url `x` (the raw 32-byte
+// Ed25519 public key). Embedded so verification needs no network on the hot
+// path AND no JWK import (workerd's importKey("jwk", …) for Ed25519 is flaky —
+// raw import is what works). JWKS is consulted only for an unknown kid, i.e.
+// key rotation.
+const KNOWN_KEYS: Record<string, string> = {
+  "queue-sig-1": "4ahZAtaZ_2Trczyw5bbXNT-x1Le5jOoa5j_PQzQ_c10",
+};
 
 function b64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+function b64urlToBytes(s: string): Uint8Array {
+  let t = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (t.length % 4) t += "=";
+  return b64ToBytes(t);
+}
+
+async function publicKeyX(keyId?: string | null): Promise<string | null> {
+  if (keyId && KNOWN_KEYS[keyId]) return KNOWN_KEYS[keyId];
+  try {
+    const res = await fetch(JWKS_URL);
+    if (res.ok) {
+      const { keys } = (await res.json()) as { keys: Array<{ kid: string; x: string }> };
+      const jwk = keys.find((k) => k.kid === keyId) ?? keys[0];
+      if (jwk?.x) return jwk.x;
+    }
+  } catch {
+    // fall through to the embedded key
+  }
+  return Object.values(KNOWN_KEYS)[0] ?? null;
 }
 
 export async function verifyDelivery(
@@ -99,18 +128,11 @@ export async function verifyDelivery(
   if (Math.abs(Date.now() / 1000 - ts) > toleranceSec) return false;
 
   try {
-    if (!jwksCache) {
-      const res = await fetch(JWKS_URL);
-      if (!res.ok) return false;
-      jwksCache = (await res.json()) as typeof jwksCache;
-    }
-    const jwk = jwksCache!.keys.find((k) => !keyId || k.kid === keyId) ?? jwksCache!.keys[0];
-    if (!jwk) return false;
-    // Import only the core OKP fields — workerd's importKey is stricter than
-    // Node's and can reject the extra kid/use/alg fields the JWKS carries.
+    const x = await publicKeyX(keyId);
+    if (!x) return false;
     const key = await crypto.subtle.importKey(
-      "jwk",
-      { kty: jwk.kty, crv: jwk.crv, x: jwk.x },
+      "raw",
+      b64urlToBytes(x) as BufferSource,
       { name: "Ed25519" },
       false,
       ["verify"],
