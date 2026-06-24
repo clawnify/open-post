@@ -69,23 +69,31 @@ export async function cancelDelivery(token: string, jobId: string): Promise<void
 
 /**
  * Verify an /api/internal/publish delivery is genuinely from the Clawnify
- * queue. Deliveries are signed with the platform's Ed25519 key; we verify with
- * the public key from /.well-known/jwks.json — no shared secret, so nothing
- * breaks on token rotation. The signed message is `${timestamp}.${rawBody}`
+ * queue. Deliveries are signed with the platform's ECDSA P-256 (ES256) key; we
+ * verify with the public key from /.well-known/jwks.json — no shared secret, so
+ * nothing breaks on token rotation. The signed message is `${timestamp}.${body}`
  * (Stripe-style); stale deliveries are rejected by the timestamp.
+ *
+ * ES256 (not Ed25519) because workerd verifies it reliably — the same path
+ * app-router uses for Supabase JWT/JWKS validation.
  *
  * (Mirrors `verifyDelivery` from @clawnify/queue; inlined until that package
  * is published.)
  */
 const JWKS_URL = "https://services.clawnify.com/.well-known/jwks.json";
 
-// Platform public verification keys, kid -> base64url `x` (the raw 32-byte
-// Ed25519 public key). Embedded so verification needs no network on the hot
-// path AND no JWK import (workerd's importKey("jwk", …) for Ed25519 is flaky —
-// raw import is what works). JWKS is consulted only for an unknown kid, i.e.
-// key rotation.
-const KNOWN_KEYS: Record<string, string> = {
-  "queue-sig-1": "4ahZAtaZ_2Trczyw5bbXNT-x1Le5jOoa5j_PQzQ_c10",
+type EcJwk = { kty: string; crv: string; x: string; y: string; kid?: string };
+
+// Platform public verification keys, kid -> EC public JWK. Embedded so
+// verification needs no network on the hot path; JWKS is consulted only for an
+// unknown kid (key rotation).
+const KNOWN_KEYS: Record<string, EcJwk> = {
+  "queue-sig-1": {
+    kty: "EC",
+    crv: "P-256",
+    x: "TjRZVA0w0Gkn1MJI9Mh8L2UWf9S6ACYj7rgyaJa9yfM",
+    y: "Uc6qqZ5xnnTD0wbSKFdGmXF83MA4_qPqi5zZJvmzpcg",
+  },
 };
 
 function b64ToBytes(b64: string): Uint8Array {
@@ -95,20 +103,14 @@ function b64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-function b64urlToBytes(s: string): Uint8Array {
-  let t = s.replace(/-/g, "+").replace(/_/g, "/");
-  while (t.length % 4) t += "=";
-  return b64ToBytes(t);
-}
-
-async function publicKeyX(keyId?: string | null): Promise<string | null> {
+async function publicJwk(keyId?: string | null): Promise<EcJwk | null> {
   if (keyId && KNOWN_KEYS[keyId]) return KNOWN_KEYS[keyId];
   try {
     const res = await fetch(JWKS_URL);
     if (res.ok) {
-      const { keys } = (await res.json()) as { keys: Array<{ kid: string; x: string }> };
+      const { keys } = (await res.json()) as { keys: EcJwk[] };
       const jwk = keys.find((k) => k.kid === keyId) ?? keys[0];
-      if (jwk?.x) return jwk.x;
+      if (jwk?.x && jwk?.y) return jwk;
     }
   } catch {
     // fall through to the embedded key
@@ -128,18 +130,18 @@ export async function verifyDelivery(
   if (Math.abs(Date.now() / 1000 - ts) > toleranceSec) return false;
 
   try {
-    const x = await publicKeyX(keyId);
-    if (!x) return false;
+    const jwk = await publicJwk(keyId);
+    if (!jwk) return false;
     const key = await crypto.subtle.importKey(
-      "raw",
-      b64urlToBytes(x) as BufferSource,
-      { name: "Ed25519" },
+      "jwk",
+      { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y },
+      { name: "ECDSA", namedCurve: "P-256" },
       false,
       ["verify"],
     );
     const msg = new TextEncoder().encode(`${ts}.${rawBody}`);
     return await crypto.subtle.verify(
-      "Ed25519",
+      { name: "ECDSA", hash: "SHA-256" },
       key,
       b64ToBytes(signature) as BufferSource,
       msg as BufferSource,
