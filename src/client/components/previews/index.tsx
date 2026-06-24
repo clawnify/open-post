@@ -2,11 +2,12 @@ import type { Channel } from "../../types";
 import { PLATFORM_LABELS } from "../../types";
 import { LinkedInPreview } from "./linkedin-preview";
 import { XPreview } from "./x-preview";
+import { InstagramPreview } from "./instagram-preview";
 import { GenericPreview } from "./generic-preview";
 
 // Platforms with a native-looking preview card. Others fall back to the generic
-// text+attachments preview. Instagram gets its own card next.
-const NATIVE_PREVIEW_PLATFORMS = new Set(["linkedin", "twitter"]);
+// text+attachments preview.
+const NATIVE_PREVIEW_PLATFORMS = new Set(["linkedin", "twitter", "instagram"]);
 
 export function hasNativePreview(platform: string): boolean {
   return NATIVE_PREVIEW_PLATFORMS.has(platform);
@@ -38,6 +39,15 @@ export function PostPreview({ channel, content, imageUrl, timeLabel }: Props) {
         <XPreview
           authorName={channel.name}
           handle={channel.handle || undefined}
+          content={content}
+          imageUrl={imageUrl}
+          timeLabel={timeLabel}
+        />
+      );
+    case "instagram":
+      return (
+        <InstagramPreview
+          username={channel.handle || channel.name}
           content={content}
           imageUrl={imageUrl}
           timeLabel={timeLabel}
