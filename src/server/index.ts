@@ -1,9 +1,8 @@
 import { Hono } from "hono";
 import { initDB, query, get, run } from "./db";
-import { initCredentials, getTwitterAuth, getToken } from "./credentials";
+import { initCredentials, getTwitterAuth, getToken, executeTool } from "./credentials";
 import type { CredentialServiceBinding } from "./credentials";
 import { postTweetBearer, postTweetOAuth1 } from "./twitter";
-import { postLinkedIn } from "./linkedin";
 import { postInstagram } from "./instagram";
 import { scheduleDelivery, cancelDelivery, verifyDelivery } from "./queue";
 
@@ -78,10 +77,20 @@ async function publishToChannel(channel: any, content: string, imageUrl?: string
       return { ...base, success: r.success, error: r.error, ref: r.tweet_id };
     }
     case "linkedin": {
-      const token = await getToken("linkedin");
-      if (!token) return { ...base, success: false, error: "No LinkedIn credentials. Connect LinkedIn in Clawnify." };
-      const r = await postLinkedIn(token, content, channel.handle);
-      return { ...base, success: r.success, error: r.error, ref: r.post_urn };
+      // Composio permanently redacts raw tokens (May 2026 incident), so post
+      // via Composio execute — it holds the real token server-side.
+      const me = await executeTool("linkedin", "LINKEDIN_GET_MY_INFO", {});
+      if (!me?.successful) return { ...base, success: false, error: me?.error || "LinkedIn not connected" };
+      const id = (me.data as { id?: string } | null)?.id;
+      if (!id) return { ...base, success: false, error: "could not resolve LinkedIn member id" };
+      const r = await executeTool("linkedin", "LINKEDIN_CREATE_LINKED_IN_POST", {
+        author: `urn:li:person:${id}`,
+        commentary: content,
+        visibility: "PUBLIC",
+        lifecycleState: "PUBLISHED",
+      });
+      const ref = (r?.data as { x_restli_id?: string } | null)?.x_restli_id;
+      return { ...base, success: !!r?.successful, error: r?.successful ? undefined : (r?.error || "LinkedIn post failed"), ref };
     }
     case "instagram": {
       const token = await getToken("instagram");
