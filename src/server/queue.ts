@@ -150,3 +150,40 @@ export async function verifyDelivery(
     return false;
   }
 }
+
+// TEMPORARY diagnostic — surfaces exactly why a delivery fails verification.
+// Remove once the queue path is confirmed working.
+export async function verifyDeliveryDebug(
+  rawBody: string,
+  headers: { signature?: string | null; timestamp?: string | null; keyId?: string | null },
+  toleranceSec = 300,
+): Promise<{ ok: boolean; reason: string }> {
+  const { signature, timestamp, keyId } = headers;
+  if (!signature) return { ok: false, reason: "no signature header" };
+  if (!timestamp) return { ok: false, reason: "no timestamp header" };
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts)) return { ok: false, reason: "ts not finite" };
+  const skew = Math.round(Date.now() / 1000 - ts);
+  if (Math.abs(skew) > toleranceSec) return { ok: false, reason: `stale skew=${skew}s` };
+  try {
+    const jwk = await publicJwk(keyId);
+    if (!jwk) return { ok: false, reason: "no jwk resolved" };
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y },
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
+    );
+    const msg = new TextEncoder().encode(`${ts}.${rawBody}`);
+    const ok = await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      key,
+      b64ToBytes(signature) as BufferSource,
+      msg as BufferSource,
+    );
+    return { ok, reason: ok ? "ok" : `verify=false (rawLen=${rawBody.length}, kid=${jwk.kty}/${jwk.crv})` };
+  } catch (e) {
+    return { ok: false, reason: "threw: " + ((e as Error)?.message || String(e)) };
+  }
+}

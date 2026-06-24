@@ -5,7 +5,7 @@ import type { CredentialServiceBinding } from "./credentials";
 import { postTweetBearer, postTweetOAuth1 } from "./twitter";
 import { postLinkedIn } from "./linkedin";
 import { postInstagram } from "./instagram";
-import { scheduleDelivery, cancelDelivery, verifyDelivery } from "./queue";
+import { scheduleDelivery, cancelDelivery, verifyDelivery, verifyDeliveryDebug } from "./queue";
 
 type Env = {
   Bindings: {
@@ -438,12 +438,12 @@ app.post("/api/posts/:id/publish", async (c) => {
 
 app.post("/api/internal/publish", async (c) => {
   const raw = await c.req.text();
-  const valid = await verifyDelivery(raw, {
+  const dbg = await verifyDeliveryDebug(raw, {
     signature: c.req.header("X-Clawnify-Signature"),
     timestamp: c.req.header("X-Clawnify-Timestamp"),
     keyId: c.req.header("X-Clawnify-Key-Id"),
   });
-  if (!valid) return c.json({ error: "invalid signature" }, 401);
+  if (!dbg.ok) return c.json({ error: "invalid signature", reason: dbg.reason }, 401);
 
   const { post_id } = JSON.parse(raw || "{}") as { post_id?: number };
   if (!post_id) return c.json({ error: "post_id required" }, 400);
