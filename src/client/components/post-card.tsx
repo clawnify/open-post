@@ -1,5 +1,5 @@
-import { Clock, Edit2, Trash2, Send } from "lucide-preact";
-import type { Post } from "../types";
+import { Clock, Edit2, Trash2, Send, ExternalLink, AlertCircle } from "lucide-preact";
+import type { Post, Channel } from "../types";
 import { PLATFORM_LABELS } from "../types";
 
 interface Props {
@@ -19,7 +19,45 @@ const STATUS_STYLES: Record<string, string> = {
   draft: "bg-muted text-muted-foreground",
   scheduled: "bg-blue-50 text-blue-700",
   published: "bg-green-50 text-green-700",
+  partial: "bg-amber-50 text-amber-700",
+  failed: "bg-red-50 text-red-700",
 };
+
+// Per-channel chip: links out to the live post when delivered, and surfaces the
+// platform rejection (e.g. Twitter "CreditsDepleted") on failure.
+function ChannelChip({ ch }: { ch: Channel }) {
+  const label = PLATFORM_LABELS[ch.platform] || ch.platform;
+  const base = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium text-white";
+
+  if (ch.delivery_status === "failed") {
+    return (
+      <span class={`${base} opacity-60`} style={{ background: ch.color }} title={ch.delivery_error || "Failed to publish"}>
+        {label} <AlertCircle size={11} />
+      </span>
+    );
+  }
+
+  if (ch.delivery_status === "published" && ch.delivery_url) {
+    return (
+      <a
+        href={ch.delivery_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        class={`${base} hover:opacity-90`}
+        style={{ background: ch.color }}
+        title="View live post"
+      >
+        {label} <ExternalLink size={11} />
+      </a>
+    );
+  }
+
+  return (
+    <span class={base} style={{ background: ch.color }}>
+      {label}
+    </span>
+  );
+}
 
 export function PostCard({ post, onEdit, onDelete, onPublish }: Props) {
   const preview = post.content.length > 140 ? post.content.slice(0, 140) + "..." : post.content;
@@ -33,13 +71,7 @@ export function PostCard({ post, onEdit, onDelete, onPublish }: Props) {
       {post.channels.length > 0 && (
         <div class="flex flex-wrap gap-1.5 mt-3">
           {post.channels.map((ch) => (
-            <span
-              key={ch.id}
-              class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium text-white"
-              style={{ background: ch.color }}
-            >
-              {PLATFORM_LABELS[ch.platform] || ch.platform}
-            </span>
+            <ChannelChip key={ch.id} ch={ch} />
           ))}
         </div>
       )}
@@ -70,11 +102,11 @@ export function PostCard({ post, onEdit, onDelete, onPublish }: Props) {
           )}
         </div>
         <div class="flex items-center gap-1">
-          {onPublish && post.status === "scheduled" && (
+          {onPublish && (post.status === "scheduled" || post.status === "failed") && (
             <button
               onClick={() => onPublish(post.id)}
               class="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-              title="Publish now"
+              title={post.status === "failed" ? "Retry" : "Publish now"}
             >
               <Send size={14} />
             </button>

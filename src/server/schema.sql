@@ -30,10 +30,20 @@ CREATE TABLE IF NOT EXISTS posts (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
--- Many-to-many: posts <-> channels
+-- Many-to-many: posts <-> channels, plus per-channel delivery state.
+-- Mirrors Postiz's per-integration publishing model (state / releaseId /
+-- releaseURL / error) so a fan-out post tracks each channel independently —
+-- one channel failing (e.g. Twitter CreditsDepleted) no longer hides behind a
+-- single post-level "published".
 CREATE TABLE IF NOT EXISTS post_channels (
   post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
   channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | published | failed
+  ref TEXT,            -- platform post id (Postiz: releaseId)
+  url TEXT,            -- link to the live post (Postiz: releaseURL)
+  error TEXT,          -- platform rejection reason when status = 'failed'
+  published_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (post_id, channel_id)
 );
 

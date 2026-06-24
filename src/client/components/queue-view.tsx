@@ -10,18 +10,27 @@ interface Props {
 export function QueueView({ navigate }: Props) {
   const { posts, loadPosts, deletePost, publishPost } = useApp();
 
-  useEffect(() => { loadPosts("status=scheduled"); }, []);
+  // Include posts that need attention — a failed or partial publish resurfaces
+  // here (with a Retry button) instead of silently vanishing.
+  useEffect(() => { loadPosts("status=scheduled,failed,partial"); }, []);
 
   const scheduled = posts
-    .filter((p) => p.status === "scheduled")
+    .filter((p) => p.status === "scheduled" || p.status === "failed" || p.status === "partial")
     .sort((a, b) => (a.scheduled_at! > b.scheduled_at! ? 1 : -1));
+
+  const needsAttention = scheduled.filter((p) => p.status === "failed" || p.status === "partial").length;
 
   return (
     <div class="p-6 max-w-4xl mx-auto">
       <div class="flex items-center justify-between mb-6">
         <div class="flex items-center gap-3">
           <h1 class="text-xl font-semibold">Queue</h1>
-          <span class="text-sm text-muted-foreground">{scheduled.length} scheduled</span>
+          <span class="text-sm text-muted-foreground">{scheduled.length} in queue</span>
+          {needsAttention > 0 && (
+            <span class="text-xs font-medium px-2 py-0.5 rounded-full bg-red-50 text-red-700">
+              {needsAttention} need attention
+            </span>
+          )}
         </div>
       </div>
 

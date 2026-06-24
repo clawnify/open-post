@@ -18,11 +18,13 @@ type Env = {
 };
 
 interface PublishResult {
+  channelId: number;
   channel: string;
   platform: string;
   success: boolean;
   error?: string;
-  ref?: string;
+  ref?: string;   // platform post id (Postiz: releaseId)
+  url?: string;   // link to the live post (Postiz: releaseURL)
 }
 
 // Publish one post to every channel assigned to it, then update its status.
@@ -45,28 +47,52 @@ async function publishPost(id: number): Promise<{ published: boolean; results: P
 
   const results: PublishResult[] = [];
   for (const channel of channels) {
-    results.push(await publishToChannel(channel, post.content, firstImage));
+    const r = await publishToChannel(channel, post.content, firstImage);
+    // Persist this channel's delivery outcome on its post_channels row.
+    await run(
+      `UPDATE post_channels
+         SET status = ?, ref = ?, url = ?, error = ?,
+             published_at = CASE WHEN ? THEN datetime('now') ELSE published_at END,
+             attempts = attempts + 1
+       WHERE post_id = ? AND channel_id = ?`,
+      [
+        r.success ? "published" : "failed",
+        r.ref ?? null,
+        r.url ?? null,
+        r.error ?? null,
+        r.success ? 1 : 0,
+        id,
+        r.channelId,
+      ],
+    );
+    results.push(r);
   }
 
-  const anySuccess = results.some((r) => r.success);
-  if (anySuccess) {
-    await run(
-      "UPDATE posts SET status = 'published', published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
-      [id],
-    );
-  }
-  return { published: anySuccess, results };
+  // Roll the post's own status up from the per-channel outcomes: all delivered
+  // → published, some delivered → partial, none → failed.
+  const delivered = results.filter((r) => r.success).length;
+  const rollup = delivered === 0 ? "failed" : delivered < results.length ? "partial" : "published";
+  await run(
+    `UPDATE posts
+       SET status = ?,
+           published_at = CASE WHEN ? THEN datetime('now') ELSE published_at END,
+           updated_at = datetime('now')
+     WHERE id = ?`,
+    [rollup, delivered > 0 ? 1 : 0, id],
+  );
+  return { published: delivered > 0, results };
 }
 
 async function publishToChannel(channel: any, content: string, imageUrl?: string): Promise<PublishResult> {
-  const base = { channel: channel.name as string, platform: channel.platform as string };
+  const base = { channelId: channel.id as number, channel: channel.name as string, platform: channel.platform as string };
   switch (channel.platform) {
     case "twitter": {
       // Composio execute (raw tokens are permanently redacted post-incident).
       const r = await executeTool("twitter", "TWITTER_CREATION_OF_A_POST", { text: content });
       if (!r) return { ...base, success: false, error: "No Twitter credentials. Connect Twitter in Clawnify." };
       const ref = (r.data as { data?: { id?: string } } | null)?.data?.id;
-      return { ...base, success: !!r.successful, error: r.successful ? undefined : (r.error || "Tweet failed"), ref };
+      const url = ref ? `https://x.com/i/status/${ref}` : undefined;
+      return { ...base, success: !!r.successful, error: r.successful ? undefined : (r.error || "Tweet failed"), ref, url };
     }
     case "linkedin": {
       // Composio permanently redacts raw tokens (May 2026 incident), so post
@@ -82,7 +108,8 @@ async function publishToChannel(channel: any, content: string, imageUrl?: string
         lifecycleState: "PUBLISHED",
       });
       const ref = (r?.data as { x_restli_id?: string } | null)?.x_restli_id;
-      return { ...base, success: !!r?.successful, error: r?.successful ? undefined : (r?.error || "LinkedIn post failed"), ref };
+      const url = ref ? `https://www.linkedin.com/feed/update/${ref}` : undefined;
+      return { ...base, success: !!r?.successful, error: r?.successful ? undefined : (r?.error || "LinkedIn post failed"), ref, url };
     }
     case "instagram": {
       // Composio execute, two-step: create media container → publish it.
@@ -234,8 +261,16 @@ app.delete("/api/labels/:id", async (c) => {
 // ── Posts ──
 
 async function enrichPost(post: any) {
+  // Include the per-channel delivery state (Postiz-style) so the UI can show
+  // each channel's status, link out to the live post, and surface failures.
   const channels = await query(
-    `SELECT c.* FROM channels c
+    `SELECT c.*,
+            pc.status AS delivery_status,
+            pc.ref AS delivery_ref,
+            pc.url AS delivery_url,
+            pc.error AS delivery_error,
+            pc.published_at AS delivery_published_at
+     FROM channels c
      JOIN post_channels pc ON pc.channel_id = c.id
      WHERE pc.post_id = ?`,
     [post.id]
@@ -264,8 +299,15 @@ app.get("/api/posts", async (c) => {
   const params: unknown[] = [];
 
   if (status) {
-    conditions.push("status = ?");
-    params.push(status);
+    // Accept a comma-separated list, e.g. status=scheduled,failed,partial.
+    const statuses = status.split(",").map((s) => s.trim()).filter(Boolean);
+    if (statuses.length === 1) {
+      conditions.push("status = ?");
+      params.push(statuses[0]);
+    } else if (statuses.length > 1) {
+      conditions.push(`status IN (${statuses.map(() => "?").join(", ")})`);
+      params.push(...statuses);
+    }
   }
   if (channelId) {
     conditions.push("id IN (SELECT post_id FROM post_channels WHERE channel_id = ?)");

@@ -1,4 +1,8 @@
-export type PostStatus = "draft" | "scheduled" | "published";
+export type PostStatus = "draft" | "scheduled" | "published" | "partial" | "failed";
+
+// Per-channel delivery state on a post's channel (Postiz-style). Present on the
+// Channel objects returned inside a Post; absent in the standalone channel list.
+export type DeliveryStatus = "pending" | "published" | "failed";
 export type Platform = "twitter" | "linkedin" | "instagram" | "facebook" | "bluesky" | "mastodon" | "threads" | "tiktok";
 
 export const PLATFORM_LIMITS: Record<Platform, number> = {
@@ -41,6 +45,12 @@ export interface Channel {
   handle: string;
   color: string;
   created_at: string;
+  // Per-channel delivery state — only populated on channels nested in a Post.
+  delivery_status?: DeliveryStatus;
+  delivery_ref?: string | null;
+  delivery_url?: string | null;
+  delivery_error?: string | null;
+  delivery_published_at?: string | null;
 }
 
 export interface Label {
