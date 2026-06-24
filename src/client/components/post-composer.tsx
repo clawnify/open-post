@@ -4,6 +4,20 @@ import { useApp } from "../context";
 import { PLATFORM_LIMITS, PLATFORM_LABELS } from "../types";
 import type { Platform } from "../types";
 
+// Timezone boundary: storage + the queue are always UTC; the browser is the
+// only timezone-aware layer. Convert local <-> UTC only here, at the edges.
+
+// datetime-local value ("2026-06-23T20:14", naive local) -> UTC ISO with Z.
+function localInputToUtc(local: string): string {
+  return new Date(local).toISOString();
+}
+
+// Stored UTC ISO -> local "YYYY-MM-DDTHH:mm" for the datetime-local input.
+function utcToLocalInput(utc: string): string {
+  const d = new Date(utc);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
 interface Props {
   editId: number | null;
   navigate: (path: string) => void;
@@ -27,7 +41,7 @@ export function PostComposer({ editId, navigate }: Props) {
       setContent(existing.content);
       setSelectedChannels(existing.channels.map((c) => c.id));
       setSelectedLabels(existing.labels.map((l) => l.id));
-      setScheduledAt(existing.scheduled_at ? existing.scheduled_at.slice(0, 16) : "");
+      setScheduledAt(existing.scheduled_at ? utcToLocalInput(existing.scheduled_at) : "");
       setMediaUrls(existing.media.map((m) => m.url));
     }
   }, [existing?.id]);
@@ -70,7 +84,7 @@ export function PostComposer({ editId, navigate }: Props) {
     const data = {
       content,
       status,
-      scheduled_at: scheduledAt ? scheduledAt + ":00" : undefined,
+      scheduled_at: scheduledAt ? localInputToUtc(scheduledAt) : undefined,
       channel_ids: selectedChannels,
       label_ids: selectedLabels,
       media_urls: mediaUrls,

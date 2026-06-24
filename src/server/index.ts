@@ -5,7 +5,7 @@ import type { CredentialServiceBinding } from "./credentials";
 import { postTweetBearer, postTweetOAuth1 } from "./twitter";
 import { postLinkedIn } from "./linkedin";
 import { postInstagram } from "./instagram";
-import { scheduleDelivery, cancelDelivery, verifyDeliverySignature } from "./queue";
+import { scheduleDelivery, cancelDelivery, verifyDelivery } from "./queue";
 
 type Env = {
   Bindings: {
@@ -431,17 +431,18 @@ app.post("/api/posts/:id/publish", async (c) => {
 
 // ── Scheduled delivery (called by the Clawnify queue at scheduled_at) ──
 //
-// Public route (declared in clawnify.json) because it's invoked server-to-
-// server by the queue with no perimeter token — authenticity is enforced by
-// the HMAC signature instead.
+// Must live under /api/ — the Clawnify builder only routes /api/* to this Hono
+// server; other paths go to the static-asset handler (which 405s a POST). It's
+// declared public in clawnify.json so the queue's tokenless server-to-server
+// POST clears the perimeter; authenticity is enforced by the HMAC signature.
 
-app.post("/internal/publish", async (c) => {
+app.post("/api/internal/publish", async (c) => {
   const raw = await c.req.text();
-  const valid = await verifyDeliverySignature(
-    raw,
-    c.req.header("X-Clawnify-Signature"),
-    c.env.CLAWNIFY_TOKEN,
-  );
+  const valid = await verifyDelivery(raw, {
+    signature: c.req.header("X-Clawnify-Signature"),
+    timestamp: c.req.header("X-Clawnify-Timestamp"),
+    keyId: c.req.header("X-Clawnify-Key-Id"),
+  });
   if (!valid) return c.json({ error: "invalid signature" }, 401);
 
   const { post_id } = JSON.parse(raw || "{}") as { post_id?: number };

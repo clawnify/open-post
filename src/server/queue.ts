@@ -35,7 +35,7 @@ export async function scheduleDelivery(opts: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        target_url: `${opts.origin}/internal/publish`,
+        target_url: `${opts.origin}/api/internal/publish`,
         payload: { post_id: opts.postId },
         run_at: new Date(runAtMs).toISOString(),
         // Reschedule to a new time = new key = new job; a retried identical
@@ -68,28 +68,53 @@ export async function cancelDelivery(token: string, jobId: string): Promise<void
 }
 
 /**
- * Verify an /internal/publish delivery is genuinely from the Clawnify queue:
- * HMAC-SHA256 of the raw body, keyed by this org's CLAWNIFY_TOKEN, in the
- * `X-Clawnify-Signature: sha256=<hex>` header.
+ * Verify an /api/internal/publish delivery is genuinely from the Clawnify
+ * queue. Deliveries are signed with the platform's Ed25519 key; we verify with
+ * the public key from /.well-known/jwks.json — no shared secret, so nothing
+ * breaks on token rotation. The signed message is `${timestamp}.${rawBody}`
+ * (Stripe-style); stale deliveries are rejected by the timestamp.
+ *
+ * (Mirrors `verifyDelivery` from @clawnify/queue; inlined until that package
+ * is published.)
  */
-export async function verifyDeliverySignature(
+const JWKS_URL = "https://services.clawnify.com/.well-known/jwks.json";
+let jwksCache: { keys: Array<{ kty: string; crv: string; x: string; kid: string }> } | null = null;
+
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+export async function verifyDelivery(
   rawBody: string,
-  signatureHeader: string | null | undefined,
-  token: string | undefined,
+  headers: { signature?: string | null; timestamp?: string | null; keyId?: string | null },
+  toleranceSec = 300,
 ): Promise<boolean> {
-  if (!signatureHeader || !token) return false;
-  const expected = signatureHeader.startsWith("sha256=") ? signatureHeader.slice(7) : signatureHeader;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(token),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody));
-  const actual = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  if (actual.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < actual.length; i++) diff |= actual.charCodeAt(i) ^ expected.charCodeAt(i);
-  return diff === 0;
+  const { signature, timestamp, keyId } = headers;
+  if (!signature || !timestamp) return false;
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts)) return false;
+  if (Math.abs(Date.now() / 1000 - ts) > toleranceSec) return false;
+
+  try {
+    if (!jwksCache) {
+      const res = await fetch(JWKS_URL);
+      if (!res.ok) return false;
+      jwksCache = (await res.json()) as typeof jwksCache;
+    }
+    const jwk = jwksCache!.keys.find((k) => !keyId || k.kid === keyId) ?? jwksCache!.keys[0];
+    if (!jwk) return false;
+    const key = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, ["verify"]);
+    const msg = new TextEncoder().encode(`${ts}.${rawBody}`);
+    return await crypto.subtle.verify(
+      "Ed25519",
+      key,
+      b64ToBytes(signature) as BufferSource,
+      msg as BufferSource,
+    );
+  } catch {
+    return false;
+  }
 }
