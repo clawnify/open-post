@@ -23,9 +23,9 @@ export interface CredentialServiceBinding {
   listConnected(orgId: string): Promise<string[]>;
   executeTool(
     service: string,
-    orgId: string,
     toolSlug: string,
     args: Record<string, unknown>,
+    orgId: string,
   ): Promise<ExecResult>;
 }
 
@@ -82,7 +82,7 @@ export async function executeTool(
   args: Record<string, unknown>,
 ): Promise<ExecResult | null> {
   if (_credentialService && _orgId) {
-    return _credentialService.executeTool(service, _orgId, toolSlug, args);
+    return _credentialService.executeTool(service, toolSlug, args, _orgId);
   }
   return null;
 }
