@@ -3,7 +3,7 @@ import { Send, Save, ArrowLeft, Image, X } from "lucide-preact";
 import { useApp } from "../context";
 import { PLATFORM_LIMITS, PLATFORM_LABELS } from "../types";
 import type { Platform } from "../types";
-import { PostPreview, hasPreview } from "./previews";
+import { PostPreview, PreviewChannelTabs } from "./previews";
 
 // Timezone boundary: storage + the queue are always UTC; the browser is the
 // only timezone-aware layer. Convert local <-> UTC only here, at the edges.
@@ -56,11 +56,24 @@ export function PostComposer({ editId, navigate }: Props) {
 
   const overLimit = charLimit !== null && content.length > charLimit;
 
-  // Channels (among those selected) that can render a native-looking preview.
+  // Selected channels, in selection order, for the preview switcher.
   const previewChannels = useMemo(
-    () => channels.filter((c) => selectedChannels.includes(c.id) && hasPreview(c.platform)),
+    () => selectedChannels.map((id) => channels.find((c) => c.id === id)).filter(Boolean) as typeof channels,
     [selectedChannels, channels],
   );
+
+  // Which selected channel's preview is shown. Defaults to the first selected;
+  // falls back to the first whenever the active one is deselected.
+  const [previewChannelId, setPreviewChannelId] = useState<number | null>(null);
+  useEffect(() => {
+    if (previewChannels.length === 0) {
+      setPreviewChannelId(null);
+    } else if (!previewChannels.some((c) => c.id === previewChannelId)) {
+      setPreviewChannelId(previewChannels[0].id);
+    }
+  }, [previewChannels, previewChannelId]);
+
+  const activePreviewChannel = previewChannels.find((c) => c.id === previewChannelId) ?? previewChannels[0];
 
   const toggleChannel = (id: number) => {
     setSelectedChannels((prev) =>
@@ -174,21 +187,22 @@ export function PostComposer({ editId, navigate }: Props) {
             )}
           </div>
 
-          {/* Live platform preview */}
-          {previewChannels.length > 0 && (
+          {/* Live platform preview — defaults to the first selected channel,
+              switchable between all selected channels. */}
+          {activePreviewChannel && (
             <div>
               <h3 class="text-sm font-medium mb-2">Preview</h3>
-              <div class="space-y-4">
-                {previewChannels.map((ch) => (
-                  <PostPreview
-                    key={ch.id}
-                    channel={ch}
-                    content={content}
-                    imageUrl={mediaUrls[0]}
-                    timeLabel="Now"
-                  />
-                ))}
-              </div>
+              <PreviewChannelTabs
+                channels={previewChannels}
+                activeId={activePreviewChannel.id}
+                onSelect={setPreviewChannelId}
+              />
+              <PostPreview
+                channel={activePreviewChannel}
+                content={content}
+                imageUrl={mediaUrls[0]}
+                timeLabel="Now"
+              />
             </div>
           )}
         </div>

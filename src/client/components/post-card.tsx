@@ -1,7 +1,7 @@
 import { Clock, Edit2, Trash2, Send, ExternalLink, AlertCircle } from "lucide-preact";
 import type { Post, Channel } from "../types";
 import { PLATFORM_LABELS } from "../types";
-import { PostPreview, hasPreview } from "./previews";
+import { PostPreview, hasNativePreview } from "./previews";
 
 interface Props {
   post: Post;
@@ -65,7 +65,7 @@ function ChannelChip({ ch }: { ch: Channel }) {
 
 export function PostCard({ post, onEdit, onDelete, onPublish, preview }: Props) {
   const excerpt = post.content.length > 140 ? post.content.slice(0, 140) + "..." : post.content;
-  const previewChannel = preview ? post.channels.find((ch) => hasPreview(ch.platform)) : undefined;
+  const previewChannel = preview ? post.channels.find((ch) => hasNativePreview(ch.platform)) : undefined;
   const firstImage = post.media[0]?.url;
   const timeLabel = post.scheduled_at
     ? new Date(post.scheduled_at + (post.scheduled_at.includes("T") ? "" : "T00:00:00"))
