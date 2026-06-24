@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 import { initDB, query, get, run } from "./db";
-import { initCredentials, getTwitterAuth, getToken, executeTool } from "./credentials";
+import { initCredentials, executeTool } from "./credentials";
 import type { CredentialServiceBinding } from "./credentials";
-import { postTweetBearer, postTweetOAuth1 } from "./twitter";
-import { postInstagram } from "./instagram";
 import { scheduleDelivery, cancelDelivery, verifyDelivery } from "./queue";
 
 type Env = {
@@ -16,12 +14,6 @@ type Env = {
     // Managed-service token (injected by Clawnify builder) — authorizes the
     // queue service that fires scheduled posts.
     CLAWNIFY_TOKEN?: string;
-    // Local dev fallback (.dev.vars)
-    TWITTER_BEARER_TOKEN?: string;
-    TWITTER_CONSUMER_KEY?: string;
-    TWITTER_CONSUMER_SECRET?: string;
-    TWITTER_ACCESS_TOKEN?: string;
-    TWITTER_ACCESS_TOKEN_SECRET?: string;
   };
 };
 
@@ -35,8 +27,9 @@ interface PublishResult {
 
 // Publish one post to every channel assigned to it, then update its status.
 // Shared by the manual publish endpoint and the scheduled /internal/publish
-// delivery. Credentials are resolved per-platform via getToken (raw tokens —
-// the app calls each platform API directly).
+// delivery. Every platform publishes via Composio execute (executeTool) —
+// Composio holds the real token server-side and permanently redacts raw tokens
+// since the May 2026 incident, so no raw-token path is usable.
 async function publishPost(id: number): Promise<{ published: boolean; results: PublishResult[] } | null> {
   const post = await get<any>("SELECT * FROM posts WHERE id = ?", [id]);
   if (!post || !post.content?.trim()) return null;
@@ -69,12 +62,11 @@ async function publishToChannel(channel: any, content: string, imageUrl?: string
   const base = { channel: channel.name as string, platform: channel.platform as string };
   switch (channel.platform) {
     case "twitter": {
-      const auth = await getTwitterAuth();
-      if (!auth) return { ...base, success: false, error: "No Twitter credentials. Connect Twitter in Clawnify." };
-      const r = auth.mode === "bearer"
-        ? await postTweetBearer(auth.accessToken, content)
-        : await postTweetOAuth1(auth, content);
-      return { ...base, success: r.success, error: r.error, ref: r.tweet_id };
+      // Composio execute (raw tokens are permanently redacted post-incident).
+      const r = await executeTool("twitter", "TWITTER_CREATION_OF_A_POST", { text: content });
+      if (!r) return { ...base, success: false, error: "No Twitter credentials. Connect Twitter in Clawnify." };
+      const ref = (r.data as { data?: { id?: string } } | null)?.data?.id;
+      return { ...base, success: !!r.successful, error: r.successful ? undefined : (r.error || "Tweet failed"), ref };
     }
     case "linkedin": {
       // Composio permanently redacts raw tokens (May 2026 incident), so post
@@ -93,10 +85,28 @@ async function publishToChannel(channel: any, content: string, imageUrl?: string
       return { ...base, success: !!r?.successful, error: r?.successful ? undefined : (r?.error || "LinkedIn post failed"), ref };
     }
     case "instagram": {
-      const token = await getToken("instagram");
-      if (!token) return { ...base, success: false, error: "No Instagram credentials. Connect Instagram in Clawnify." };
-      const r = await postInstagram(token, { igUserId: channel.handle, caption: content, imageUrl });
-      return { ...base, success: r.success, error: r.error, ref: r.media_id };
+      // Composio execute, two-step: create media container → publish it.
+      // IG requires a Business account, an image, and the IG Business Account
+      // ID (stored in channel.handle).
+      if (!imageUrl) return { ...base, success: false, error: "Instagram requires an image." };
+      const igUserId = channel.handle as string | undefined;
+      if (!igUserId) return { ...base, success: false, error: "Instagram channel missing Business Account ID (handle)." };
+      const container = await executeTool("instagram", "INSTAGRAM_CREATE_MEDIA_CONTAINER", {
+        ig_user_id: igUserId,
+        image_url: imageUrl,
+        caption: content,
+        content_type: "photo",
+      });
+      if (!container) return { ...base, success: false, error: "No Instagram credentials. Connect Instagram in Clawnify." };
+      if (!container.successful) return { ...base, success: false, error: container.error || "Instagram container failed" };
+      const creationId = (container.data as { id?: string } | null)?.id;
+      if (!creationId) return { ...base, success: false, error: "Instagram: no creation_id returned" };
+      const pub = await executeTool("instagram", "INSTAGRAM_CREATE_POST", {
+        ig_user_id: igUserId,
+        creation_id: creationId,
+      });
+      const ref = (pub?.data as { id?: string } | null)?.id;
+      return { ...base, success: !!pub?.successful, error: pub?.successful ? undefined : (pub?.error || "Instagram publish failed"), ref };
     }
     default:
       return { ...base, success: false, error: `Publishing to ${channel.platform} not yet supported` };
