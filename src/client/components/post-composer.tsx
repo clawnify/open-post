@@ -3,6 +3,7 @@ import { Send, Save, ArrowLeft, Image, X } from "lucide-preact";
 import { useApp } from "../context";
 import { PLATFORM_LIMITS, PLATFORM_LABELS } from "../types";
 import type { Platform } from "../types";
+import { PostPreview, hasPreview } from "./previews";
 
 // Timezone boundary: storage + the queue are always UTC; the browser is the
 // only timezone-aware layer. Convert local <-> UTC only here, at the edges.
@@ -54,6 +55,12 @@ export function PostComposer({ editId, navigate }: Props) {
   }, [selectedChannels, channels]);
 
   const overLimit = charLimit !== null && content.length > charLimit;
+
+  // Channels (among those selected) that can render a native-looking preview.
+  const previewChannels = useMemo(
+    () => channels.filter((c) => selectedChannels.includes(c.id) && hasPreview(c.platform)),
+    [selectedChannels, channels],
+  );
 
   const toggleChannel = (id: number) => {
     setSelectedChannels((prev) =>
@@ -166,6 +173,24 @@ export function PostComposer({ editId, navigate }: Props) {
               </div>
             )}
           </div>
+
+          {/* Live platform preview */}
+          {previewChannels.length > 0 && (
+            <div>
+              <h3 class="text-sm font-medium mb-2">Preview</h3>
+              <div class="space-y-4">
+                {previewChannels.map((ch) => (
+                  <PostPreview
+                    key={ch.id}
+                    channel={ch}
+                    content={content}
+                    imageUrl={mediaUrls[0]}
+                    timeLabel="Now"
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}

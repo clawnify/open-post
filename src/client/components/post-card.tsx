@@ -1,12 +1,16 @@
 import { Clock, Edit2, Trash2, Send, ExternalLink, AlertCircle } from "lucide-preact";
 import type { Post, Channel } from "../types";
 import { PLATFORM_LABELS } from "../types";
+import { PostPreview, hasPreview } from "./previews";
 
 interface Props {
   post: Post;
   onEdit: (id: number) => void;
   onDelete: (id: number) => void;
   onPublish?: (id: number) => void;
+  // When set, render the post as a native-looking platform preview (used in the
+  // queue) instead of the plain text excerpt.
+  preview?: boolean;
 }
 
 function formatDate(d: string | null) {
@@ -59,14 +63,24 @@ function ChannelChip({ ch }: { ch: Channel }) {
   );
 }
 
-export function PostCard({ post, onEdit, onDelete, onPublish }: Props) {
-  const preview = post.content.length > 140 ? post.content.slice(0, 140) + "..." : post.content;
+export function PostCard({ post, onEdit, onDelete, onPublish, preview }: Props) {
+  const excerpt = post.content.length > 140 ? post.content.slice(0, 140) + "..." : post.content;
+  const previewChannel = preview ? post.channels.find((ch) => hasPreview(ch.platform)) : undefined;
+  const firstImage = post.media[0]?.url;
+  const timeLabel = post.scheduled_at
+    ? new Date(post.scheduled_at + (post.scheduled_at.includes("T") ? "" : "T00:00:00"))
+        .toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : "Now";
 
   return (
     <div class="bg-card border border-border rounded-lg p-4 hover:shadow-md transition-shadow">
-      <p class="text-sm text-foreground leading-relaxed whitespace-pre-wrap">
-        {preview || "(empty)"}
-      </p>
+      {previewChannel ? (
+        <PostPreview channel={previewChannel} content={post.content} imageUrl={firstImage} timeLabel={timeLabel} />
+      ) : (
+        <p class="text-sm text-foreground leading-relaxed whitespace-pre-wrap">
+          {excerpt || "(empty)"}
+        </p>
+      )}
 
       {post.channels.length > 0 && (
         <div class="flex flex-wrap gap-1.5 mt-3">

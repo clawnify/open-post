@@ -55,6 +55,7 @@ export function QueueView({ navigate }: Props) {
               onEdit={(id) => navigate(`/compose/${id}`)}
               onDelete={deletePost}
               onPublish={publishPost}
+              preview
             />
           ))}
         </div>
