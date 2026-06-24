@@ -5,7 +5,7 @@ import type { CredentialServiceBinding } from "./credentials";
 import { postTweetBearer, postTweetOAuth1 } from "./twitter";
 import { postLinkedIn } from "./linkedin";
 import { postInstagram } from "./instagram";
-import { scheduleDelivery, cancelDelivery, verifyDelivery, verifyDeliveryDebug } from "./queue";
+import { scheduleDelivery, cancelDelivery, verifyDelivery } from "./queue";
 
 type Env = {
   Bindings: {
@@ -438,12 +438,14 @@ app.post("/api/posts/:id/publish", async (c) => {
 
 app.post("/api/internal/publish", async (c) => {
   const raw = await c.req.text();
-  const dbg = await verifyDeliveryDebug(raw, {
-    signature: c.req.header("X-Clawnify-Signature"),
-    timestamp: c.req.header("X-Clawnify-Timestamp"),
-    keyId: c.req.header("X-Clawnify-Key-Id"),
+  // app-router strips incoming X-Clawnify-* headers, so the queue sends
+  // delivery metadata under X-Queue-*.
+  const valid = await verifyDelivery(raw, {
+    signature: c.req.header("X-Queue-Signature"),
+    timestamp: c.req.header("X-Queue-Timestamp"),
+    keyId: c.req.header("X-Queue-Key-Id"),
   });
-  if (!dbg.ok) return c.json({ error: "invalid signature", reason: dbg.reason }, 401);
+  if (!valid) return c.json({ error: "invalid signature" }, 401);
 
   const { post_id } = JSON.parse(raw || "{}") as { post_id?: number };
   if (!post_id) return c.json({ error: "post_id required" }, 400);
