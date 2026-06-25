@@ -68,6 +68,13 @@ export function useAppState() {
     } catch (e: any) { setError(e.message); }
   }, [loadChannels]);
 
+  const syncChannelProfile = useCallback(async (id: number) => {
+    try {
+      await api("POST", `/api/channels/${id}/sync-profile`);
+      await loadChannels();
+    } catch (e: any) { setError(e.message); }
+  }, [loadChannels]);
+
   const deleteChannel = useCallback(async (id: number) => {
     try {
       await api("DELETE", `/api/channels/${id}`);
@@ -155,7 +162,7 @@ export function useAppState() {
     loading, error, clearError,
     setCalendarMonth,
     loadPosts, loadStats, loadCalendar,
-    createChannel, updateChannel, deleteChannel,
+    createChannel, updateChannel, deleteChannel, syncChannelProfile,
     createLabel, updateLabel, deleteLabel,
     createPost, updatePost, deletePost, publishPost,
   };

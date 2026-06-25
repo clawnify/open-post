@@ -45,6 +45,13 @@ export interface Channel {
   handle: string;
   color: string;
   created_at: string;
+  // Cached platform profile (synced from the connected account) for accurate
+  // previews — real name, photo, @handle, headline.
+  profile_name?: string | null;
+  profile_handle?: string | null;
+  profile_avatar_url?: string | null;
+  profile_headline?: string | null;
+  profile_synced_at?: string | null;
   // Per-channel delivery state — only populated on channels nested in a Post.
   delivery_status?: DeliveryStatus;
   delivery_ref?: string | null;

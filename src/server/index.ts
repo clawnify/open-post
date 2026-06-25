@@ -162,6 +162,82 @@ async function syncSchedule(
   await run("UPDATE posts SET queue_job_id = ? WHERE id = ?", [newJobId, postId]);
 }
 
+interface ChannelProfile {
+  profile_name: string | null;
+  profile_handle: string | null;
+  profile_avatar_url: string | null;
+  profile_headline: string | null;
+}
+
+// Fetch the live platform profile for a channel via Composio so previews render
+// the real name / photo / @handle / headline. Returns null when the platform
+// has no profile fetch, isn't connected, or the call fails (off-platform too).
+async function fetchChannelProfile(channel: any): Promise<ChannelProfile | null> {
+  try {
+    switch (channel.platform) {
+      case "linkedin": {
+        const r = await executeTool("linkedin", "LINKEDIN_GET_MY_INFO", {});
+        if (!r?.successful) return null;
+        const d = (r.data as any) || {};
+        const name = [d.localizedFirstName, d.localizedLastName].filter(Boolean).join(" ").trim();
+        return {
+          profile_name: name || null,
+          profile_handle: null,
+          profile_avatar_url: d.profilePicture?.displayImage || null,
+          profile_headline: null, // not exposed by LINKEDIN_GET_MY_INFO
+        };
+      }
+      case "twitter": {
+        const r = await executeTool("twitter", "TWITTER_USER_LOOKUP_ME", {
+          user__fields: "name,username,profile_image_url,description",
+        });
+        if (!r?.successful) return null;
+        const d = (r.data as any)?.data || {};
+        return {
+          profile_name: d.name || null,
+          profile_handle: d.username || null,
+          // Swap Twitter's 48px "_normal" crop for the 400px original.
+          profile_avatar_url: (d.profile_image_url || "").replace("_normal", "_400x400") || null,
+          profile_headline: d.description || null,
+        };
+      }
+      case "instagram": {
+        const igUserId = channel.handle; // IG Business Account ID
+        if (!igUserId) return null;
+        const r = await executeTool("instagram", "INSTAGRAM_GET_USER_INFO", { ig_user_id: igUserId });
+        if (!r?.successful) return null;
+        const d = (r.data as any) || {};
+        return {
+          profile_name: d.username || null,
+          profile_handle: d.username || null,
+          profile_avatar_url: d.profile_picture_url || null,
+          profile_headline: d.biography || null,
+        };
+      }
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+// Fetch + persist the platform profile onto a channel row. Returns the updated
+// row (or the unchanged row when the fetch yields nothing).
+async function syncChannelProfile(id: number): Promise<any | null> {
+  const channel = await get<any>("SELECT * FROM channels WHERE id = ?", [id]);
+  if (!channel) return null;
+  const profile = await fetchChannelProfile(channel);
+  if (profile) {
+    await run(
+      `UPDATE channels SET profile_name = ?, profile_handle = ?, profile_avatar_url = ?,
+         profile_headline = ?, profile_synced_at = datetime('now') WHERE id = ?`,
+      [profile.profile_name, profile.profile_handle, profile.profile_avatar_url, profile.profile_headline, id],
+    );
+  }
+  return get<any>("SELECT * FROM channels WHERE id = ?", [id]);
+}
+
 const app = new Hono<Env>();
 
 app.use("*", async (c, next) => {
@@ -190,8 +266,20 @@ app.post("/api/channels", async (c) => {
     "INSERT INTO channels (name, platform, handle, color) VALUES (?, ?, ?, ?)",
     [name.trim(), platform || "twitter", handle || "", color || "#1da1f2"]
   );
-  const row = await get("SELECT * FROM channels WHERE id = ?", [result.lastInsertRowid]);
+  const id = Number(result.lastInsertRowid);
+  // Pull the real platform profile so previews are accurate from the start.
+  // Best-effort: a failed sync still returns the created channel.
+  const row =
+    (await syncChannelProfile(id)) ?? (await get("SELECT * FROM channels WHERE id = ?", [id]));
   return c.json(row, 201);
+});
+
+// Re-sync a channel's cached platform profile on demand.
+app.post("/api/channels/:id/sync-profile", async (c) => {
+  const id = Number(c.req.param("id"));
+  const row = await syncChannelProfile(id);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  return c.json(row);
 });
 
 app.put("/api/channels/:id", async (c) => {

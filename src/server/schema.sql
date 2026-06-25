@@ -5,6 +5,13 @@ CREATE TABLE IF NOT EXISTS channels (
   platform TEXT NOT NULL DEFAULT 'twitter',
   handle TEXT DEFAULT '',
   color TEXT NOT NULL DEFAULT '#1da1f2',
+  -- Cached platform profile, synced from the connected account via Composio,
+  -- so previews render the real name / photo / @handle / headline.
+  profile_name TEXT,
+  profile_handle TEXT,
+  profile_avatar_url TEXT,
+  profile_headline TEXT,
+  profile_synced_at TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 

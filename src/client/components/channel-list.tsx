@@ -1,13 +1,21 @@
 import { useState } from "preact/hooks";
-import { Plus, Trash2, Edit2, Check, X } from "lucide-preact";
+import { Plus, Trash2, Edit2, Check, X, RefreshCw } from "lucide-preact";
 import { useApp } from "../context";
 import { PLATFORM_LABELS, PLATFORM_COLORS } from "../types";
 import type { Platform } from "../types";
 
 const PLATFORMS: Platform[] = ["twitter", "linkedin", "instagram", "facebook", "bluesky", "mastodon", "threads", "tiktok"];
 
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 export function ChannelList() {
-  const { channels, createChannel, updateChannel, deleteChannel } = useApp();
+  const { channels, createChannel, updateChannel, deleteChannel, syncChannelProfile } = useApp();
+  const [syncingId, setSyncingId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState("");
@@ -132,16 +140,39 @@ export function ChannelList() {
             <div key={ch.id} class="bg-card border border-border rounded-lg overflow-hidden">
               <div class="h-1" style={{ background: ch.color }} />
               <div class="p-4">
-                <div class="flex items-start justify-between">
-                  <div>
+                <div class="flex items-start gap-3">
+                  {ch.profile_avatar_url ? (
+                    <img src={ch.profile_avatar_url} alt="" class="w-10 h-10 rounded-full object-cover shrink-0" />
+                  ) : (
+                    <div
+                      class="w-10 h-10 rounded-full text-white flex items-center justify-center text-xs font-semibold shrink-0"
+                      style={{ background: ch.color }}
+                    >
+                      {initials(ch.profile_name || ch.name)}
+                    </div>
+                  )}
+                  <div class="min-w-0">
                     <span class="text-xs font-medium" style={{ color: ch.color }}>
                       {PLATFORM_LABELS[ch.platform] || ch.platform}
                     </span>
-                    <h3 class="text-sm font-semibold mt-0.5">{ch.name}</h3>
-                    {ch.handle && <span class="text-xs text-muted-foreground">{ch.handle}</span>}
+                    <h3 class="text-sm font-semibold mt-0.5 truncate">{ch.profile_name || ch.name}</h3>
+                    {(ch.profile_handle || ch.handle) && (
+                      <span class="text-xs text-muted-foreground truncate block">
+                        {ch.profile_handle ? `@${ch.profile_handle}` : ch.handle}
+                      </span>
+                    )}
                   </div>
                 </div>
-                <div class="flex gap-2 mt-3 pt-3 border-t border-border">
+                <div class="flex gap-3 mt-3 pt-3 border-t border-border">
+                  <button
+                    class="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                    onClick={async () => { setSyncingId(ch.id); await syncChannelProfile(ch.id); setSyncingId(null); }}
+                    disabled={syncingId === ch.id}
+                    title="Pull the latest name, photo and handle from the connected account"
+                  >
+                    <RefreshCw size={12} class={syncingId === ch.id ? "animate-spin" : ""} />
+                    {syncingId === ch.id ? "Syncing…" : "Sync"}
+                  </button>
                   <button
                     class="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
                     onClick={() => startEdit(ch)}

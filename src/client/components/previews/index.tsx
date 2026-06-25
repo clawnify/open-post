@@ -27,8 +27,9 @@ export function PostPreview({ channel, content, imageUrl, timeLabel }: Props) {
     case "linkedin":
       return (
         <LinkedInPreview
-          authorName={channel.name}
-          authorHeadline={channel.handle || undefined}
+          authorName={channel.profile_name || channel.name}
+          authorHeadline={channel.profile_headline || channel.handle || undefined}
+          avatarUrl={channel.profile_avatar_url || undefined}
           content={content}
           imageUrl={imageUrl}
           timeLabel={timeLabel}
@@ -37,8 +38,9 @@ export function PostPreview({ channel, content, imageUrl, timeLabel }: Props) {
     case "twitter":
       return (
         <XPreview
-          authorName={channel.name}
-          handle={channel.handle || undefined}
+          authorName={channel.profile_name || channel.name}
+          handle={channel.profile_handle || channel.handle || undefined}
+          avatarUrl={channel.profile_avatar_url || undefined}
           content={content}
           imageUrl={imageUrl}
           timeLabel={timeLabel}
@@ -47,7 +49,8 @@ export function PostPreview({ channel, content, imageUrl, timeLabel }: Props) {
     case "instagram":
       return (
         <InstagramPreview
-          username={channel.handle || channel.name}
+          username={channel.profile_handle || channel.handle || channel.name}
+          avatarUrl={channel.profile_avatar_url || undefined}
           content={content}
           imageUrl={imageUrl}
           timeLabel={timeLabel}
