@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "preact/hooks";
-import { Send, Save, ArrowLeft, Image, X } from "lucide-preact";
+import { Send, Save, ArrowLeft, Image, X, Upload, Loader2 } from "lucide-preact";
 import { useApp } from "../context";
 import { PLATFORM_LIMITS, PLATFORM_LABELS } from "../types";
 import type { Platform } from "../types";
@@ -25,7 +25,7 @@ interface Props {
 }
 
 export function PostComposer({ editId, navigate }: Props) {
-  const { channels, labels, posts, createPost, updatePost } = useApp();
+  const { channels, labels, posts, createPost, updatePost, uploadImage } = useApp();
 
   const existing = editId ? posts.find((p) => p.id === editId) : null;
 
@@ -35,6 +35,7 @@ export function PostComposer({ editId, navigate }: Props) {
   const [scheduledAt, setScheduledAt] = useState("");
   const [mediaUrls, setMediaUrls] = useState<string[]>([]);
   const [newMediaUrl, setNewMediaUrl] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -92,6 +93,17 @@ export function PostComposer({ editId, navigate }: Props) {
       setMediaUrls((prev) => [...prev, newMediaUrl.trim()]);
       setNewMediaUrl("");
     }
+  };
+
+  const uploadFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith("image/")) continue;
+      const url = await uploadImage(file);
+      if (url) setMediaUrls((prev) => [...prev, url]);
+    }
+    setUploading(false);
   };
 
   const removeMedia = (index: number) => {
@@ -153,10 +165,35 @@ export function PostComposer({ editId, navigate }: Props) {
           {/* Media */}
           <div>
             <h3 class="text-sm font-medium mb-2">Media</h3>
-            <div class="flex gap-2">
+
+            {/* Primary: upload (click or drop) */}
+            <label
+              class="flex flex-col items-center justify-center gap-2 px-4 py-6 border-2 border-dashed border-border rounded-lg text-sm text-muted-foreground cursor-pointer hover:border-primary/50 hover:bg-accent/40 transition-colors"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => { e.preventDefault(); uploadFiles((e as DragEvent).dataTransfer?.files ?? null); }}
+            >
+              {uploading ? (
+                <><Loader2 size={18} class="animate-spin" /> Uploading…</>
+              ) : (
+                <>
+                  <Upload size={18} />
+                  <span><span class="text-foreground font-medium">Upload images</span> or drag &amp; drop</span>
+                </>
+              )}
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                class="hidden"
+                onChange={(e) => { uploadFiles((e.target as HTMLInputElement).files); (e.target as HTMLInputElement).value = ""; }}
+              />
+            </label>
+
+            {/* Secondary: paste a URL */}
+            <div class="flex gap-2 mt-2">
               <input
                 type="url"
-                placeholder="Paste image URL..."
+                placeholder="…or paste an image URL"
                 value={newMediaUrl}
                 onInput={(e) => setNewMediaUrl((e.target as HTMLInputElement).value)}
                 onKeyDown={(e) => e.key === "Enter" && addMedia()}

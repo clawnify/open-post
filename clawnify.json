@@ -6,12 +6,13 @@
   "app": {
     "framework": "preact+hono",
     "database": true,
-    "storage": false,
+    "storage": true,
     "credentials": ["twitter", "linkedin", "instagram"]
   },
   "api": {
     "public_routes": [
-      { "path": "/api/internal/publish", "methods": ["POST"] }
+      { "path": "/api/internal/publish", "methods": ["POST"] },
+      { "path": "/api/uploads/*", "methods": ["GET"] }
     ]
   }
 }

@@ -68,6 +68,18 @@ export function useAppState() {
     } catch (e: any) { setError(e.message); }
   }, [loadChannels]);
 
+  // Upload an image to the app's storage; returns its public URL.
+  const uploadImage = useCallback(async (file: File): Promise<string | null> => {
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/upload", { method: "POST", body: fd });
+      const data = (await r.json()) as { url?: string; error?: string };
+      if (!r.ok || !data.url) throw new Error(data.error || "Upload failed");
+      return data.url;
+    } catch (e: any) { setError(e.message); return null; }
+  }, []);
+
   const syncChannelProfile = useCallback(async (id: number) => {
     try {
       await api("POST", `/api/channels/${id}/sync-profile`);
@@ -163,6 +175,7 @@ export function useAppState() {
     setCalendarMonth,
     loadPosts, loadStats, loadCalendar,
     createChannel, updateChannel, deleteChannel, syncChannelProfile,
+    uploadImage,
     createLabel, updateLabel, deleteLabel,
     createPost, updatePost, deletePost, publishPost,
   };

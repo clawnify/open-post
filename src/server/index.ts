@@ -3,10 +3,13 @@ import { initDB, query, get, run } from "./db";
 import { initCredentials, executeTool } from "./credentials";
 import type { CredentialServiceBinding } from "./credentials";
 import { scheduleDelivery, cancelDelivery, verifyDelivery } from "./queue";
+import { initUploads, uploadsEnabled, putUpload, getUpload, makeKey } from "./uploads";
 
 type Env = {
   Bindings: {
     DB: D1Database;
+    // R2 bucket for uploaded post images (clawnify.json app.storage: true)
+    UPLOADS?: R2Bucket;
     // Service binding (production — injected by Clawnify builder)
     CREDENTIALS?: CredentialServiceBinding;
     // App owner's org ID (injected by builder as env var)
@@ -242,12 +245,41 @@ const app = new Hono<Env>();
 
 app.use("*", async (c, next) => {
   initDB(c.env);
+  initUploads(c.env.UPLOADS);
   initCredentials({
     env: c.env as unknown as Record<string, string>,
     credentialService: c.env.CREDENTIALS,
     orgId: c.env.CLAWNIFY_ORG_ID,
   });
   await next();
+});
+
+// ── Image uploads ──
+
+// Upload an image to R2 and return its absolute, publicly-fetchable URL. The
+// URL must be public because the social platforms (Instagram especially) fetch
+// the image server-side at publish time — see /api/uploads/:key in the public
+// routes (clawnify.json).
+app.post("/api/upload", async (c) => {
+  if (!uploadsEnabled()) return c.json({ error: "Uploads not configured" }, 503);
+  const body = await c.req.parseBody();
+  const file = body["file"];
+  if (!file || typeof file === "string") return c.json({ error: "No file provided" }, 400);
+  if (!file.type.startsWith("image/")) return c.json({ error: "Only images are supported" }, 400);
+
+  const key = makeKey(file.name || "image");
+  await putUpload(key, await file.arrayBuffer(), file.type || "application/octet-stream");
+
+  const url = `${new URL(c.req.url).origin}/api/uploads/${key}`;
+  return c.json({ url }, 201);
+});
+
+app.get("/api/uploads/:key", async (c) => {
+  const obj = await getUpload(c.req.param("key"));
+  if (!obj) return c.json({ error: "Not found" }, 404);
+  return new Response(obj.data, {
+    headers: { "Content-Type": obj.contentType, "Cache-Control": "public, max-age=31536000" },
+  });
 });
 
 // ── Channels ──
